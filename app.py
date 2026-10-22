@@ -6,7 +6,7 @@ MODEL = "gemini-3.8-flash"
 
 @st.cache_resource
 def get_client():
-    return genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
+         return genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
 
 client = get_client()
 
