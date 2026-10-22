@@ -1,6 +1,6 @@
 import time
 import streamlit as st
-from google import genai
+from groq import Groq
 
 st.set_page_config(page_title="Sparkle AI", page_icon="✨")
 
@@ -42,25 +42,27 @@ code {color: #FFFFFF;}
 </style>
 """, unsafe_allow_html=True)
 
-MODEL = "gemini-3.8-flash"
+MODEL = "llama-3.3-70b-versatile"
 
 
 @st.cache_resource
 def get_client():
-    return genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
+    return Groq(api_key=st.secrets["GROQ_API_KEY"])
 
 
-def stream_reply(contents):
+def stream_reply(messages):
     client = get_client()
     for attempt in range(3):
         got_text = False
         try:
-            for chunk in client.models.generate_content_stream(
-                model=MODEL, contents=contents
-            ):
-                if chunk.text:
+            stream = client.chat.completions.create(
+                model=MODEL, messages=messages, stream=True
+            )
+            for chunk in stream:
+                text = chunk.choices[0].delta.content
+                if text:
                     got_text = True
-                    yield chunk.text
+                    yield text
             return
         except Exception as e:
             if got_text:
@@ -90,13 +92,9 @@ if prompt:
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    contents = [
-        {"role": "user" if m["role"] == "user" else "model",
-         "parts": [{"text": m["content"]}]}
-        for m in st.session_state.messages[-20:]
-    ]
+    messages = st.session_state.messages[-20:]
 
     with st.chat_message("assistant"):
-        reply = st.write_stream(stream_reply(contents))
+        reply = st.write_stream(stream_reply(messages))
 
     st.session_state.messages.append({"role": "assistant", "content": reply})
