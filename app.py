@@ -7,34 +7,38 @@ st.set_page_config(page_title="Sparkle AI", page_icon="✨")
 st.markdown("""
 <style>
 #MainMenu, footer, header {visibility: hidden;}
-.stApp {background-color: #FFFFFF; color: #1F2937;}
+.stApp {background-color: #000000; color: #F3F4F6;}
 .block-container {padding-top: 1.5rem; max-width: 720px;}
-h1 {text-align: center; font-size: 1.7rem; color: #1F2937;}
-p, li, span, label {color: #1F2937;}
+h1 {text-align: center; font-size: 1.7rem; color: #FFFFFF;}
+p, li, span, label, div {color: #F3F4F6;}
 [data-testid="stChatMessage"] {
-    background: #F3F4F6;
+    background: #1A1A1A;
     border-radius: 20px;
     padding: 12px 16px;
     margin-bottom: 10px;
 }
-[data-testid="stChatInput"] {background: #FFFFFF;}
+[data-testid="stBottom"], [data-testid="stBottom"] > div {
+    background: #000000;
+}
+[data-testid="stChatInput"] {background: #000000;}
 [data-testid="stChatInput"] > div {
     border-radius: 28px;
-    border: 1px solid #E5E7EB;
-    background: #F9FAFB;
+    border: 1px solid #333333;
+    background: #1A1A1A;
 }
 [data-testid="stChatInput"] textarea {
-    color: #1F2937;
-    background: #F9FAFB;
+    color: #FFFFFF;
+    background: #1A1A1A;
 }
 .stButton > button {
     border-radius: 999px;
-    border: 1px solid #E5E7EB;
-    background: #FFFFFF;
-    color: #1F2937;
+    border: 1px solid #333333;
+    background: #000000;
+    color: #FFFFFF;
     padding: 6px 18px;
 }
-.stButton > button:hover {background: #F3F4F6; border-color: #D1D5DB;}
+.stButton > button:hover {background: #1A1A1A; border-color: #555555;}
+code {color: #FFFFFF;}
 </style>
 """, unsafe_allow_html=True)
 
