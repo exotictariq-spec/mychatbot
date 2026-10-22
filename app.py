@@ -1,7 +1,6 @@
 import time
 import uuid
 import json
-import hashlib
 import httpx
 import streamlit as st
 from groq import Groq
@@ -39,6 +38,7 @@ LANGUAGES = {
     "Hindi": "hi",
     "Marathi": "mr",
 }
+FILE_TYPES = ["txt", "md", "csv", "json", "py", "html", "js", "log"]
 
 BASE_STYLE = (
     "Answer directly and briefly. Give only the information the user needs. "
@@ -116,12 +116,8 @@ if "chats" not in ss:
         else:
             st.warning("Could not load saved chats, so saving is off for now. Refresh to try again.")
     new_chat()
-if "up_key" not in ss:
-    ss.up_key = 0
-if "last_audio" not in ss:
-    ss.last_audio = None
 
-# ---------- Sidebar: new chat, recent chats, attachment, settings ----------
+# ---------- Sidebar: new chat, recent chats, settings ----------
 with st.sidebar:
     st.markdown("### ✨ Sparkle AI")
     if st.button("➕ New chat", use_container_width=True):
@@ -147,20 +143,11 @@ with st.sidebar:
             st.rerun()
 
     st.divider()
-    st.markdown("**📎 Attach files**")
-    uploaded = st.file_uploader(
-        "Text files only (txt, md, csv, json, py, html, js, log)",
-        type=["txt", "md", "csv", "json", "py", "html", "js", "log"],
-        accept_multiple_files=True,
-        key=f"up_{ss.up_key}",
-    )
-
-    st.divider()
     with st.expander("⚙️ Settings"):
         model_name = st.selectbox("Model", list(MODELS.keys()))
         instructions = st.text_area(
             "Instructions for the AI",
-            placeholder="Example: Answer in simple English, keep it short.",
+            placeholder="Example: Always answer in Hindi.",
         )
         lang_name = st.selectbox("Voice language", list(LANGUAGES.keys()))
         if gist_ready() and ss.can_save:
@@ -181,27 +168,6 @@ chat = ss.chats[ss.current]
 for m in chat["messages"]:
     with st.chat_message(m["role"]):
         st.markdown(m.get("show", m["content"]))
-
-# ---------- Mic ----------
-with st.expander("🎤 Voice"):
-    audio = st.audio_input("Tap to record, then stop")
-
-typed = st.chat_input("Message Sparkle...")
-user_text = typed
-
-if audio is not None:
-    data = audio.getvalue()
-    h = hashlib.md5(data).hexdigest()
-    if h != ss.last_audio:
-        ss.last_audio = h
-        with st.spinner("Listening..."):
-            try:
-                kwargs = {"file": ("voice.wav", data), "model": "whisper-large-v3-turbo"}
-                if lang:
-                    kwargs["language"] = lang
-                user_text = client.audio.transcriptions.create(**kwargs).text
-            except Exception as e:
-                st.error("Could not understand the voice: " + str(e)[:200])
 
 
 # ---------- Ask the model (streaming, with retry) ----------
@@ -230,24 +196,52 @@ def stream_reply(messages):
     yield "\n\nError: " + err[:300]
 
 
-if user_text and user_text.strip():
-    full = user_text
-    shown = user_text
-    for f in uploaded or []:
-        body = f.getvalue().decode("utf-8", errors="ignore")[:20000]
-        full += f"\n\n[Attached file: {f.name}]\n{body}"
-        shown += f"\n\n📎 {f.name}"
+# ---------- Message bar with 📎 attach and 🎤 mic inside ----------
+prompt = st.chat_input(
+    "Message Sparkle...",
+    accept_file="multiple",
+    file_type=FILE_TYPES,
+    accept_audio=True,
+)
 
-    if not chat["messages"]:
-        chat["title"] = user_text.strip()[:28]
-    chat["messages"].append({"role": "user", "content": full, "show": shown})
+if prompt:
+    user_text = (prompt.text or "").strip()
+    files = prompt.files or []
+    audio = getattr(prompt, "audio", None)
 
-    with st.chat_message("user"):
-        st.markdown(shown)
-    with st.chat_message("assistant"):
-        reply = st.write_stream(stream_reply(chat["messages"]))
-    chat["messages"].append({"role": "assistant", "content": reply})
+    if audio is not None:
+        with st.spinner("Listening..."):
+            try:
+                kwargs = {
+                    "file": ("voice.wav", audio.getvalue()),
+                    "model": "whisper-large-v3-turbo",
+                }
+                if lang:
+                    kwargs["language"] = lang
+                heard = client.audio.transcriptions.create(**kwargs).text
+                user_text = (user_text + " " + heard).strip()
+            except Exception as e:
+                st.error("Could not understand the voice: " + str(e)[:200])
 
-    save_chats()
-    ss.up_key += 1  # clears the attachment box
-    st.rerun()
+    if user_text or files:
+        if not user_text:
+            user_text = "Please read the attached file."
+        full = user_text
+        shown = user_text
+        for f in files:
+            body = f.getvalue().decode("utf-8", errors="ignore")[:20000]
+            full += f"\n\n[Attached file: {f.name}]\n{body}"
+            shown += f"\n\n📎 {f.name}"
+
+        if not chat["messages"]:
+            chat["title"] = user_text[:28]
+        chat["messages"].append({"role": "user", "content": full, "show": shown})
+
+        with st.chat_message("user"):
+            st.markdown(shown)
+        with st.chat_message("assistant"):
+            reply = st.write_stream(stream_reply(chat["messages"]))
+        chat["messages"].append({"role": "assistant", "content": reply})
+
+        save_chats()
+        st.rerun()
