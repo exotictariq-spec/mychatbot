@@ -1,100 +1,253 @@
 import time
+import uuid
+import json
+import hashlib
+import httpx
 import streamlit as st
 from groq import Groq
 
-st.set_page_config(page_title="Sparkle AI", page_icon="✨")
+st.set_page_config(page_title="Sparkle AI", page_icon="✨", layout="centered")
 
+# ---------- Look: black, ChatGPT-style ----------
 st.markdown("""
 <style>
-#MainMenu, footer, header {visibility: hidden;}
+footer {visibility: hidden;}
 .stApp {background-color: #000000; color: #F3F4F6;}
-.block-container {padding-top: 1.5rem; max-width: 720px;}
-h1 {text-align: center; font-size: 1.7rem; color: #FFFFFF;}
-p, li, span, label, div {color: #F3F4F6;}
-[data-testid="stChatMessage"] {
-    background: #1A1A1A;
-    border-radius: 20px;
-    padding: 12px 16px;
-    margin-bottom: 10px;
-}
-[data-testid="stBottom"], [data-testid="stBottom"] > div {
-    background: #000000;
-}
-[data-testid="stChatInput"] {background: #000000;}
-[data-testid="stChatInput"] > div {
-    border-radius: 28px;
-    border: 1px solid #333333;
-    background: #1A1A1A;
-}
-[data-testid="stChatInput"] textarea {
-    color: #FFFFFF;
-    background: #1A1A1A;
-}
-.stButton > button {
-    border-radius: 999px;
-    border: 1px solid #333333;
-    background: #000000;
-    color: #FFFFFF;
-    padding: 6px 18px;
-}
-.stButton > button:hover {background: #1A1A1A; border-color: #555555;}
-code {color: #FFFFFF;}
+section[data-testid="stSidebar"] {background-color: #111111;}
+.block-container {padding-top: 2rem; max-width: 720px;}
 </style>
 """, unsafe_allow_html=True)
 
-MODEL = "openai/gpt-oss-120b"
+
+# ---------- Groq client (key stays in Streamlit Secrets) ----------
+def get_key():
+    for name in ("GROQ_API_KEY", "GROQ_KEY", "API_KEY"):
+        if name in st.secrets:
+            return st.secrets[name]
+    return list(st.secrets.values())[0]
 
 
-@st.cache_resource
-def get_client():
-    return Groq(api_key=st.secrets["GROQ_API_KEY"])
+client = Groq(api_key=get_key())
+
+MODELS = {
+    "Smarter (120B)": "openai/gpt-oss-120b",
+    "Faster (20B)": "openai/gpt-oss-20b",
+}
+LANGUAGES = {
+    "Auto": None,
+    "English": "en",
+    "Hindi": "hi",
+    "Marathi": "mr",
+}
+
+BASE_STYLE = (
+    "Answer directly and briefly. Give only the information the user needs. "
+    "No long introductions, no repeated points, no unnecessary warnings or extra tips. "
+    "Use simple words and short sentences. Use bullet points only when they really help. "
+    "If the question is simple, answer in one or two sentences. "
+    "Reply in the same language the user writes in."
+)
+
+ss = st.session_state
 
 
+# ---------- Permanent storage (GitHub Gist) ----------
+def gist_ready():
+    return "GITHUB_TOKEN" in st.secrets and "GIST_ID" in st.secrets
+
+
+def gh_headers():
+    return {
+        "Authorization": "Bearer " + st.secrets["GITHUB_TOKEN"],
+        "Accept": "application/vnd.github+json",
+    }
+
+
+def gist_url():
+    return "https://api.github.com/gists/" + st.secrets["GIST_ID"]
+
+
+def load_chats():
+    """Returns a dict of chats, or None if loading failed."""
+    try:
+        r = httpx.get(gist_url(), headers=gh_headers(), timeout=20)
+        r.raise_for_status()
+        f = r.json()["files"]["chats.json"]
+        text = f["content"]
+        if f.get("truncated"):
+            text = httpx.get(f["raw_url"], timeout=20).text
+        data = json.loads(text or "{}")
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return None
+
+
+def save_chats():
+    if not gist_ready() or not ss.can_save:
+        return
+    keep = {cid: c for cid, c in ss.chats.items() if c["messages"]}
+    try:
+        r = httpx.patch(
+            gist_url(),
+            headers=gh_headers(),
+            json={"files": {"chats.json": {"content": json.dumps(keep)}}},
+            timeout=20,
+        )
+        r.raise_for_status()
+    except Exception as e:
+        st.toast("Could not save chats: " + str(e)[:100])
+
+
+# ---------- State ----------
+def new_chat():
+    cid = uuid.uuid4().hex[:8]
+    ss.chats[cid] = {"title": "New chat", "messages": []}
+    ss.current = cid
+
+
+if "chats" not in ss:
+    ss.can_save = False
+    ss.chats = {}
+    if gist_ready():
+        loaded = load_chats()
+        if loaded is not None:
+            ss.chats = loaded
+            ss.can_save = True
+        else:
+            st.warning("Could not load saved chats, so saving is off for now. Refresh to try again.")
+    new_chat()
+if "up_key" not in ss:
+    ss.up_key = 0
+if "last_audio" not in ss:
+    ss.last_audio = None
+
+# ---------- Sidebar: new chat, recent chats, attachment, settings ----------
+with st.sidebar:
+    st.markdown("### ✨ Sparkle AI")
+    if st.button("➕ New chat", use_container_width=True):
+        if ss.chats[ss.current]["messages"]:
+            new_chat()
+        st.rerun()
+
+    st.markdown("**Recent chats**")
+    for cid in reversed(list(ss.chats.keys())):
+        chat = ss.chats[cid]
+        c1, c2 = st.columns([5, 1])
+        label = ("● " if cid == ss.current else "") + chat["title"]
+        if c1.button(label, key=f"open_{cid}", use_container_width=True):
+            ss.current = cid
+            st.rerun()
+        if c2.button("🗑", key=f"del_{cid}"):
+            del ss.chats[cid]
+            if not ss.chats:
+                new_chat()
+            elif ss.current == cid:
+                ss.current = list(ss.chats.keys())[-1]
+            save_chats()
+            st.rerun()
+
+    st.divider()
+    st.markdown("**📎 Attach files**")
+    uploaded = st.file_uploader(
+        "Text files only (txt, md, csv, json, py, html, js, log)",
+        type=["txt", "md", "csv", "json", "py", "html", "js", "log"],
+        accept_multiple_files=True,
+        key=f"up_{ss.up_key}",
+    )
+
+    st.divider()
+    with st.expander("⚙️ Settings"):
+        model_name = st.selectbox("Model", list(MODELS.keys()))
+        instructions = st.text_area(
+            "Instructions for the AI",
+            placeholder="Example: Answer in simple English, keep it short.",
+        )
+        lang_name = st.selectbox("Voice language", list(LANGUAGES.keys()))
+        if gist_ready() and ss.can_save:
+            st.caption("✅ Chats are saved permanently")
+        else:
+            st.caption("⚠️ Chats are NOT saved (check Secrets)")
+        if st.button("Delete all chats", use_container_width=True):
+            ss.chats = {}
+            new_chat()
+            save_chats()
+            st.rerun()
+
+model = MODELS[model_name]
+lang = LANGUAGES[lang_name]
+chat = ss.chats[ss.current]
+
+# ---------- Show the conversation ----------
+for m in chat["messages"]:
+    with st.chat_message(m["role"]):
+        st.markdown(m.get("show", m["content"]))
+
+# ---------- Mic ----------
+with st.expander("🎤 Voice"):
+    audio = st.audio_input("Tap to record, then stop")
+
+typed = st.chat_input("Message Sparkle...")
+user_text = typed
+
+if audio is not None:
+    data = audio.getvalue()
+    h = hashlib.md5(data).hexdigest()
+    if h != ss.last_audio:
+        ss.last_audio = h
+        with st.spinner("Listening..."):
+            try:
+                kwargs = {"file": ("voice.wav", data), "model": "whisper-large-v3-turbo"}
+                if lang:
+                    kwargs["language"] = lang
+                user_text = client.audio.transcriptions.create(**kwargs).text
+            except Exception as e:
+                st.error("Could not understand the voice: " + str(e)[:200])
+
+
+# ---------- Ask the model (streaming, with retry) ----------
 def stream_reply(messages):
-    client = get_client()
-    for attempt in range(3):
-        got_text = False
+    system_text = BASE_STYLE
+    if instructions.strip():
+        system_text += " " + instructions.strip()
+    msgs = [{"role": "system", "content": system_text}]
+    msgs += [{"role": m["role"], "content": m["content"]} for m in messages]
+    err = ""
+    for _ in range(3):
+        got_any = False
         try:
-            stream = client.chat.completions.create(
-                model=MODEL, messages=messages, stream=True
-            )
+            stream = client.chat.completions.create(model=model, messages=msgs, stream=True)
             for chunk in stream:
-                text = chunk.choices[0].delta.content
-                if text:
-                    got_text = True
-                    yield text
+                piece = chunk.choices[0].delta.content
+                if piece:
+                    got_any = True
+                    yield piece
             return
         except Exception as e:
-            if got_text:
-                return
-            if attempt == 2:
-                yield "Error: " + str(e)[:300]
-                return
-            time.sleep(1)
+            err = str(e)
+            if got_any:
+                break
+            time.sleep(2)
+    yield "\n\nError: " + err[:300]
 
 
-st.title("✨ Sparkle AI")
+if user_text and user_text.strip():
+    full = user_text
+    shown = user_text
+    for f in uploaded or []:
+        body = f.getvalue().decode("utf-8", errors="ignore")[:20000]
+        full += f"\n\n[Attached file: {f.name}]\n{body}"
+        shown += f"\n\n📎 {f.name}"
 
-if "messages" not in st.session_state:
-    st.session_state.messages = []
+    if not chat["messages"]:
+        chat["title"] = user_text.strip()[:28]
+    chat["messages"].append({"role": "user", "content": full, "show": shown})
 
-if st.button("＋ New chat"):
-    st.session_state.messages = []
-    st.rerun()
-
-for m in st.session_state.messages:
-    with st.chat_message(m["role"]):
-        st.markdown(m["content"])
-
-prompt = st.chat_input("Ask me anything...")
-if prompt:
-    st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
-        st.markdown(prompt)
-
-    messages = st.session_state.messages[-20:]
-
+        st.markdown(shown)
     with st.chat_message("assistant"):
-        reply = st.write_stream(stream_reply(messages))
+        reply = st.write_stream(stream_reply(chat["messages"]))
+    chat["messages"].append({"role": "assistant", "content": reply})
 
-    st.session_state.messages.append({"role": "assistant", "content": reply})
+    save_chats()
+    ss.up_key += 1  # clears the attachment box
+    st.rerun()
