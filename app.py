@@ -28,7 +28,8 @@ if prompt:
                 try:
                     reply = st.session_state.chat.send_message(prompt).text
                     break
-                except Exception:
+                except Exception as e:
+                    reply = "Error: " + str(e)[:300]
                     time.sleep(4)
         st.markdown(reply)
 
