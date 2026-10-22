@@ -42,7 +42,7 @@ code {color: #FFFFFF;}
 </style>
 """, unsafe_allow_html=True)
 
-MODEL = "llama-3.3-70b-versatile"
+MODEL = "openai/gpt-oss-120b"
 
 
 @st.cache_resource
