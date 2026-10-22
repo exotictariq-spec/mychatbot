@@ -2,8 +2,13 @@ import time
 import streamlit as st
 from google import genai
 
-client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
 MODEL = "gemini-3.8-flash"
+
+@st.cache_resource
+def get_client():
+    return genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
+
+client = get_client()
 
 st.title("My AI Chatbot")
 
@@ -21,10 +26,10 @@ if prompt:
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    reply = "Sorry, server is busy. Try again."
+    reply = "Sorry, something went wrong."
     with st.chat_message("assistant"):
         with st.spinner("Thinking..."):
-            for _ in range(5):
+            for _ in range(4):
                 try:
                     reply = st.session_state.chat.send_message(prompt).text
                     break
