@@ -16,7 +16,7 @@ st.set_page_config(page_title="Sparkle AI", page_icon="✨")
 TEXT_MODEL = "openai/gpt-oss-120b"
 VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
 VOICE_MODEL = "whisper-large-v3-turbo"
-SEARCH_MODEL = "groq/compound"
+SEARCH_MODEL = "openai/gpt-oss-120b"
 
 # ---------- Look: no icons, you on the right, Sparkle on the left ----------
 st.markdown("""
@@ -365,7 +365,9 @@ if prompt:
     if has_image:
         model, extra_args = VISION_MODEL, {}
     elif use_web:
-        model, extra_args = SEARCH_MODEL, {}
+        model = SEARCH_MODEL
+        extra_args = {"tools": [{"type": "browser_search"}],
+                      "reasoning_effort": "medium"}
     else:
         model, extra_args = TEXT_MODEL, {"reasoning_effort": effort}
 
@@ -379,11 +381,21 @@ if prompt:
     with st.chat_message("assistant"):
         try:
             if use_web and not has_image:
+                reply = None
                 with st.spinner("Searching the web..."):
-                    r = llm.chat.completions.create(
-                        model=model, messages=api_messages)
-                reply = r.choices[0].message.content or "No answer found."
-                st.markdown(reply)
+                    try:
+                        r = llm.chat.completions.create(
+                            model=model, messages=api_messages, **extra_args)
+                        reply = r.choices[0].message.content
+                    except Exception as e:
+                        st.caption("Web search failed (" + str(e)[:80]
+                                   + "). Answering without it.")
+                if reply:
+                    st.markdown(reply)
+                else:
+                    model = TEXT_MODEL
+                    extra_args = {"reasoning_effort": effort}
+                    reply = st.write_stream(stream_reply())
             else:
                 reply = st.write_stream(stream_reply())
         except Exception as e:
@@ -401,4 +413,3 @@ if prompt:
         st.warning("Could not save this chat: " + str(e)[:150])
     if created:
         st.rerun()
-        
