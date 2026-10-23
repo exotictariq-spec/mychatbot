@@ -15,6 +15,26 @@ st.set_page_config(page_title="Sparkle AI", page_icon="✨")
 
 TEXT_MODEL = "openai/gpt-oss-120b"
 VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
+VOICE_MODEL = "whisper-large-v3-turbo"
+
+# ---------- Look: no icons, you on the right, Sparkle on the left ----------
+st.markdown("""
+<style>
+[data-testid="stChatMessageAvatarUser"],
+[data-testid="stChatMessageAvatarAssistant"] { display: none; }
+[data-testid="stChatMessage"] { background: transparent; padding: 0.25rem 0; }
+[data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) {
+    flex-direction: row-reverse;
+    align-self: flex-end;
+    width: fit-content;
+    max-width: 85%;
+    margin-left: auto;
+    background: rgba(128,128,128,0.2);
+    border-radius: 18px;
+    padding: 0.6rem 1rem;
+}
+</style>
+""", unsafe_allow_html=True)
 
 
 @st.cache_resource
@@ -244,17 +264,31 @@ def read_files(files):
     return extra, parts[:5], shown, names
 
 
-# ---------- Message bar ----------
+# ---------- Message bar: + for files, mic for voice ----------
 prompt = st.chat_input(
     "Ask Sparkle AI...",
     accept_file="multiple",
     file_type=["png", "jpg", "jpeg", "webp", "mp4", "mov", "webm",
                "pdf", "txt", "md", "csv", "json", "py"],
+    accept_audio=True,
 )
 
 if prompt:
     user_text = prompt.text or ""
     files = prompt.files or []
+
+    audio = getattr(prompt, "audio", None)
+    if audio is not None:
+        try:
+            tr = llm.audio.transcriptions.create(
+                model=VOICE_MODEL, file=("voice.wav", audio.getvalue()))
+            user_text = (user_text + " " + tr.text).strip()
+        except Exception as e:
+            st.warning("Could not read the voice message: " + str(e)[:150])
+
+    if not user_text and not files:
+        st.stop()
+
     extra, parts, shown, names = read_files(files)
     api_text = (user_text or "Please look at what I attached.") + extra
     show_text = user_text
@@ -275,13 +309,16 @@ if prompt:
                "or follow-up suggestions.")
         effort = "low"
     else:
-        how = ("Answer like a thoughtful expert: give the direct answer "
-               "first, then a clear, well-organised explanation. Use "
-               "Markdown: short headings, bullet lists, numbered steps, "
-               "tables for comparisons, and code blocks with a language "
-               "name. Give a short example when it helps. Be accurate, say "
-               "so when you are unsure, and never make things up. Skip "
-               "filler, flattery and repeating the question.")
+        how = ("Answer like a thoughtful expert. Start straight with the "
+               "answer in plain words. Never write labels or headings such "
+               "as 'Direct answer', 'Answer' or 'Summary'. Then explain "
+               "clearly and in an organised way. Use Markdown when it "
+               "helps: bullet lists, numbered steps, tables for "
+               "comparisons, and code blocks with a language name. Use "
+               "headings only for long answers with several parts. Give a "
+               "short example when it helps. Be accurate, say so when you "
+               "are unsure, and never make things up. Skip filler, "
+               "flattery and repeating the question.")
         effort = "medium"
     system = (f"You are Sparkle AI. Your name is Sparkle AI. The user's name "
               f"is {name}; do not use it in every reply. Reply in the same "
