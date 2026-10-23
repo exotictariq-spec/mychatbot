@@ -342,7 +342,11 @@ if prompt:
         effort = "medium"
     system = (f"You are Sparkle AI. Your name is Sparkle AI. The user's name "
               f"is {name}; do not use it in every reply. Reply in the same "
-              f"language as the user. {how}")
+              f"language as the user. The user may make spelling mistakes "
+              f"or mix Hindi and English. Silently work out what they mean "
+              f"and answer that, without pointing out their mistakes. If "
+              f"the meaning is really unclear, give the most likely answer "
+              f"and add one short line saying what you assumed. {how}")
     if use_web:
         today = datetime.now(timezone.utc).strftime("%d %B %Y")
         system += (f" Today's date is {today}. Use web search for anything "
