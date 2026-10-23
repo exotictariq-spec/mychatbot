@@ -62,6 +62,9 @@ db = get_db()
 def login_screen():
     st.markdown("<h1 style='text-align:center'>✨ Sparkle AI</h1>",
                 unsafe_allow_html=True)
+    if st.button("Continue with Google", use_container_width=True):
+        st.login()
+    st.caption("or use your email")
     tab1, tab2 = st.tabs(["Log in", "Sign up"])
     with tab1:
         email = st.text_input("Email", key="li_email")
@@ -93,12 +96,21 @@ def login_screen():
                 st.error(str(e)[:200])
 
 
+# ---------- Check if the user came back from Google ----------
+try:
+    if st.user.is_logged_in and "user" not in st.session_state:
+        gmail = str(st.user.email).lower()
+        st.session_state.user = {"owner": "g:" + gmail, "email": gmail,
+                                 "google": True}
+except Exception:
+    pass
+
 if "user" not in st.session_state:
     login_screen()
     st.stop()
 
 user = st.session_state.user
-owner = "sb:" + user["id"]
+owner = user.get("owner") or ("sb:" + user["id"])
 
 st.session_state.setdefault("messages", [])
 st.session_state.setdefault("chat_id", None)
@@ -167,9 +179,13 @@ with st.sidebar:
             st.rerun()
     st.caption(user["email"])
     if st.button("Log out"):
+        is_google = user.get("google", False)
         for k in ["user", "messages", "chat_id", "name"]:
             st.session_state.pop(k, None)
-        st.rerun()
+        if is_google:
+            st.logout()
+        else:
+            st.rerun()
 
 
 # ---------- Greeting ----------
