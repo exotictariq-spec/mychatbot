@@ -2,3 +2,4 @@ streamlit>=1.43
 openai
 pypdf
 opencv-python-headless
+supabase
