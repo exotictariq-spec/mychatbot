@@ -16,6 +16,7 @@ st.set_page_config(page_title="Sparkle AI", page_icon="✨")
 TEXT_MODEL = "openai/gpt-oss-120b"
 VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
 VOICE_MODEL = "whisper-large-v3-turbo"
+SEARCH_MODEL = "groq/compound"
 
 # ---------- Look: no icons, you on the right, Sparkle on the left ----------
 st.markdown("""
@@ -170,6 +171,7 @@ with st.sidebar:
     with st.expander("⚙️ Settings"):
         name = st.text_input("Your name", key="name")
         style = st.radio("Answer style", ["Detailed", "Short"])
+        web = st.toggle("🌐 Web search", value=False)
         if st.session_state.chat_id and st.button("🗑 Delete this chat"):
             (db.table("chats").delete()
              .eq("id", st.session_state.chat_id)
@@ -319,6 +321,8 @@ if prompt:
             st.image(img, width=250)
         st.markdown(show_text)
 
+    use_web = web and not parts
+
     if style == "Short":
         how = ("Keep replies brief and direct, 1 to 4 sentences unless the "
                "user asks for more. Do not add extra information, warnings "
@@ -339,6 +343,11 @@ if prompt:
     system = (f"You are Sparkle AI. Your name is Sparkle AI. The user's name "
               f"is {name}; do not use it in every reply. Reply in the same "
               f"language as the user. {how}")
+    if use_web:
+        today = datetime.now(timezone.utc).strftime("%d %B %Y")
+        system += (f" Today's date is {today}. Use web search for anything "
+                   f"current or recent. When you used the web, end with a "
+                   f"short list of the source links.")
 
     history = st.session_state.messages[-12:]
     while history and history[0]["role"] == "assistant":
@@ -353,8 +362,12 @@ if prompt:
         api_messages.append({"role": m["role"], "content": content})
 
     has_image = bool(history[-1]["parts"])
-    model = VISION_MODEL if has_image else TEXT_MODEL
-    extra_args = {} if has_image else {"reasoning_effort": effort}
+    if has_image:
+        model, extra_args = VISION_MODEL, {}
+    elif use_web:
+        model, extra_args = SEARCH_MODEL, {}
+    else:
+        model, extra_args = TEXT_MODEL, {"reasoning_effort": effort}
 
     def stream_reply():
         resp = llm.chat.completions.create(
@@ -365,7 +378,14 @@ if prompt:
 
     with st.chat_message("assistant"):
         try:
-            reply = st.write_stream(stream_reply())
+            if use_web and not has_image:
+                with st.spinner("Searching the web..."):
+                    r = llm.chat.completions.create(
+                        model=model, messages=api_messages)
+                reply = r.choices[0].message.content or "No answer found."
+                st.markdown(reply)
+            else:
+                reply = st.write_stream(stream_reply())
         except Exception as e:
             reply = "Error: " + str(e)[:300]
             st.markdown(reply)
@@ -381,3 +401,4 @@ if prompt:
         st.warning("Could not save this chat: " + str(e)[:150])
     if created:
         st.rerun()
+        
