@@ -1,247 +1,195 @@
-import time
-import uuid
-import json
-import httpx
+import base64
+import html
+import io
+import os
+import tempfile
+from datetime import datetime
+
+import cv2
 import streamlit as st
-from groq import Groq
+from openai import OpenAI
+from pypdf import PdfReader
 
-st.set_page_config(page_title="Sparkle AI", page_icon="✨", layout="centered")
+st.set_page_config(page_title="Sparkle AI", page_icon="✨")
 
-# ---------- Look: black, ChatGPT-style ----------
-st.markdown("""
-<style>
-footer {visibility: hidden;}
-.stApp {background-color: #000000; color: #F3F4F6;}
-section[data-testid="stSidebar"] {background-color: #111111;}
-.block-container {padding-top: 2rem; max-width: 720px;}
-</style>
-""", unsafe_allow_html=True)
+TEXT_MODEL = "openai/gpt-oss-120b"
+VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
 
 
-# ---------- Groq client (key stays in Streamlit Secrets) ----------
-def get_key():
-    for name in ("GROQ_API_KEY", "GROQ_KEY", "API_KEY"):
-        if name in st.secrets:
-            return st.secrets[name]
-    return list(st.secrets.values())[0]
+@st.cache_resource
+def get_client():
+    return OpenAI(api_key=st.secrets["GROQ_API_KEY"],
+                  base_url="https://api.groq.com/openai/v1")
 
 
-client = Groq(api_key=get_key())
+client = get_client()
 
-MODELS = {
-    "Smarter (120B)": "openai/gpt-oss-120b",
-    "Faster (20B)": "openai/gpt-oss-20b",
-}
-LANGUAGES = {
-    "Auto": None,
-    "English": "en",
-    "Hindi": "hi",
-    "Marathi": "mr",
-}
-FILE_TYPES = ["txt", "md", "csv", "json", "py", "html", "js", "log"]
-
-BASE_STYLE = (
-    "Answer directly and briefly. Give only the information the user needs. "
-    "No long introductions, no repeated points, no unnecessary warnings or extra tips. "
-    "Use simple words and short sentences. Use bullet points only when they really help. "
-    "If the question is simple, answer in one or two sentences. "
-    "Reply in the same language the user writes in."
-)
-
-ss = st.session_state
-
-
-# ---------- Permanent storage (GitHub Gist) ----------
-def gist_ready():
-    return "GITHUB_TOKEN" in st.secrets and "GIST_ID" in st.secrets
-
-
-def gh_headers():
-    return {
-        "Authorization": "Bearer " + st.secrets["GITHUB_TOKEN"],
-        "Accept": "application/vnd.github+json",
-    }
-
-
-def gist_url():
-    return "https://api.github.com/gists/" + st.secrets["GIST_ID"]
-
-
-def load_chats():
-    """Returns a dict of chats, or None if loading failed."""
-    try:
-        r = httpx.get(gist_url(), headers=gh_headers(), timeout=20)
-        r.raise_for_status()
-        f = r.json()["files"]["chats.json"]
-        text = f["content"]
-        if f.get("truncated"):
-            text = httpx.get(f["raw_url"], timeout=20).text
-        data = json.loads(text or "{}")
-        return data if isinstance(data, dict) else {}
-    except Exception:
-        return None
-
-
-def save_chats():
-    if not gist_ready() or not ss.can_save:
-        return
-    keep = {cid: c for cid, c in ss.chats.items() if c["messages"]}
-    try:
-        r = httpx.patch(
-            gist_url(),
-            headers=gh_headers(),
-            json={"files": {"chats.json": {"content": json.dumps(keep)}}},
-            timeout=20,
-        )
-        r.raise_for_status()
-    except Exception as e:
-        st.toast("Could not save chats: " + str(e)[:100])
-
-
-# ---------- State ----------
-def new_chat():
-    cid = uuid.uuid4().hex[:8]
-    ss.chats[cid] = {"title": "New chat", "messages": []}
-    ss.current = cid
-
-
-if "chats" not in ss:
-    ss.can_save = False
-    ss.chats = {}
-    if gist_ready():
-        loaded = load_chats()
-        if loaded is not None:
-            ss.chats = loaded
-            ss.can_save = True
-        else:
-            st.warning("Could not load saved chats, so saving is off for now. Refresh to try again.")
-    new_chat()
-
-# ---------- Sidebar: new chat, recent chats, settings ----------
+# ---------- Settings ----------
 with st.sidebar:
-    st.markdown("### ✨ Sparkle AI")
-    if st.button("➕ New chat", use_container_width=True):
-        if ss.chats[ss.current]["messages"]:
-            new_chat()
+    st.header("Settings")
+    name = st.text_input("Your name", value="friend")
+    style = st.radio("Answer style", ["Short", "Detailed"])
+    if st.button("New chat"):
+        st.session_state.messages = []
         st.rerun()
 
-    st.markdown("**Recent chats**")
-    for cid in reversed(list(ss.chats.keys())):
-        chat = ss.chats[cid]
-        c1, c2 = st.columns([5, 1])
-        label = ("● " if cid == ss.current else "") + chat["title"]
-        if c1.button(label, key=f"open_{cid}", use_container_width=True):
-            ss.current = cid
-            st.rerun()
-        if c2.button("🗑", key=f"del_{cid}"):
-            del ss.chats[cid]
-            if not ss.chats:
-                new_chat()
-            elif ss.current == cid:
-                ss.current = list(ss.chats.keys())[-1]
-            save_chats()
-            st.rerun()
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
-    st.divider()
-    with st.expander("⚙️ Settings"):
-        model_name = st.selectbox("Model", list(MODELS.keys()))
-        instructions = st.text_area(
-            "Instructions for the AI",
-            placeholder="Example: Always answer in Hindi.",
-        )
-        lang_name = st.selectbox("Voice language", list(LANGUAGES.keys()))
-        if gist_ready() and ss.can_save:
-            st.caption("✅ Chats are saved permanently")
-        else:
-            st.caption("⚠️ Chats are NOT saved (check Secrets)")
-        if st.button("Delete all chats", use_container_width=True):
-            ss.chats = {}
-            new_chat()
-            save_chats()
-            st.rerun()
 
-model = MODELS[model_name]
-lang = LANGUAGES[lang_name]
-chat = ss.chats[ss.current]
+# ---------- Greeting ----------
+def greeting():
+    try:
+        from zoneinfo import ZoneInfo
+        hour = datetime.now(ZoneInfo("Asia/Kolkata")).hour
+    except Exception:
+        hour = datetime.now().hour
+    if hour < 12:
+        return "Good morning"
+    if hour < 17:
+        return "Good afternoon"
+    return "Good evening"
 
-# ---------- Show the conversation ----------
-for m in chat["messages"]:
+
+if not st.session_state.messages:
+    st.markdown(
+        f"<h2 style='text-align:center;margin-top:30vh'>"
+        f"{greeting()}, {html.escape(name)}</h2>",
+        unsafe_allow_html=True)
+
+# ---------- Show old messages ----------
+for m in st.session_state.messages:
     with st.chat_message(m["role"]):
-        st.markdown(m.get("show", m["content"]))
+        for img in m["images"]:
+            st.image(img, width=250)
+        st.markdown(m["show"])
 
 
-# ---------- Ask the model (streaming, with retry) ----------
-def stream_reply(messages):
-    system_text = BASE_STYLE
-    if instructions.strip():
-        system_text += " " + instructions.strip()
-    msgs = [{"role": "system", "content": system_text}]
-    msgs += [{"role": m["role"], "content": m["content"]} for m in messages]
-    err = ""
-    for _ in range(3):
-        got_any = False
-        try:
-            stream = client.chat.completions.create(model=model, messages=msgs, stream=True)
-            for chunk in stream:
-                piece = chunk.choices[0].delta.content
-                if piece:
-                    got_any = True
-                    yield piece
-            return
-        except Exception as e:
-            err = str(e)
-            if got_any:
-                break
-            time.sleep(2)
-    yield "\n\nError: " + err[:300]
+# ---------- Helpers for attached files ----------
+def to_part(data, mime):
+    b64 = base64.b64encode(data).decode()
+    return {"type": "image_url",
+            "image_url": {"url": f"data:{mime};base64,{b64}"}}
 
 
-# ---------- Message bar with 📎 attach and 🎤 mic inside ----------
+def video_frames(data, ext, n=4):
+    frames = []
+    path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix="." + ext, delete=False) as t:
+            t.write(data)
+            path = t.name
+        cap = cv2.VideoCapture(path)
+        total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        for i in range(n):
+            cap.set(cv2.CAP_PROP_POS_FRAMES, int(total * (i + 0.5) / n))
+            ok, frame = cap.read()
+            if not ok:
+                continue
+            h, w = frame.shape[:2]
+            scale = 640 / max(h, w)
+            if scale < 1:
+                frame = cv2.resize(frame, (int(w * scale), int(h * scale)))
+            ok2, buf = cv2.imencode(".jpg", frame)
+            if ok2:
+                frames.append(buf.tobytes())
+        cap.release()
+    except Exception:
+        pass
+    finally:
+        if path and os.path.exists(path):
+            os.remove(path)
+    return frames
+
+
+def read_files(files):
+    extra, parts, shown = "", [], []
+    for f in files:
+        ext = f.name.lower().rsplit(".", 1)[-1]
+        data = f.getvalue()
+        if ext in ("png", "jpg", "jpeg", "webp"):
+            mime = "image/jpeg" if ext in ("jpg", "jpeg") else "image/" + ext
+            parts.append(to_part(data, mime))
+            shown.append(data)
+        elif ext in ("mp4", "mov", "webm"):
+            frames = video_frames(data, ext)
+            for fr in frames:
+                parts.append(to_part(fr, "image/jpeg"))
+            if frames:
+                shown.append(frames[0])
+            extra += (f"\n\n[Video: {f.name}. You can see {len(frames)} "
+                      f"pictures taken from it. You cannot hear audio.]")
+        elif ext == "pdf":
+            reader = PdfReader(io.BytesIO(data))
+            txt = "\n".join((p.extract_text() or "") for p in reader.pages)
+            extra += f"\n\n[File: {f.name}]\n{txt[:12000]}"
+        else:
+            txt = data.decode("utf-8", errors="ignore")
+            extra += f"\n\n[File: {f.name}]\n{txt[:12000]}"
+    return extra, parts[:5], shown
+
+
+# ---------- Message bar with + button ----------
 prompt = st.chat_input(
-    "Message Sparkle...",
+    "Ask Sparkle AI...",
     accept_file="multiple",
-    file_type=FILE_TYPES,
-    accept_audio=True,
+    file_type=["png", "jpg", "jpeg", "webp", "mp4", "mov", "webm",
+               "pdf", "txt", "md", "csv", "json", "py"],
 )
 
 if prompt:
-    user_text = (prompt.text or "").strip()
+    user_text = prompt.text or ""
     files = prompt.files or []
-    audio = getattr(prompt, "audio", None)
+    extra, parts, shown = read_files(files)
+    api_text = (user_text or "Please look at what I attached.") + extra
 
-    if audio is not None:
-        with st.spinner("Listening..."):
-            try:
-                kwargs = {
-                    "file": ("voice.wav", audio.getvalue()),
-                    "model": "whisper-large-v3-turbo",
-                }
-                if lang:
-                    kwargs["language"] = lang
-                heard = client.audio.transcriptions.create(**kwargs).text
-                user_text = (user_text + " " + heard).strip()
-            except Exception as e:
-                st.error("Could not understand the voice: " + str(e)[:200])
+    st.session_state.messages.append({
+        "role": "user", "text": api_text, "parts": parts,
+        "images": shown, "show": user_text or "(file attached)"})
+    with st.chat_message("user"):
+        for img in shown:
+            st.image(img, width=250)
+        st.markdown(user_text or "(file attached)")
 
-    if user_text or files:
-        if not user_text:
-            user_text = "Please read the attached file."
-        full = user_text
-        shown = user_text
-        for f in files:
-            body = f.getvalue().decode("utf-8", errors="ignore")[:20000]
-            full += f"\n\n[Attached file: {f.name}]\n{body}"
-            shown += f"\n\n📎 {f.name}"
+    if style == "Short":
+        how = "Keep replies brief and to the point, 1 to 4 sentences unless asked for more."
+    else:
+        how = "Give clear and thorough answers."
+    system = (f"You are Sparkle AI. Your name is Sparkle AI. "
+              f"The user's name is {name}. Reply in the same language as the user. "
+              f"{how} Do not add extra information, warnings or follow-up "
+              f"suggestions that the user did not ask for.")
 
-        if not chat["messages"]:
-            chat["title"] = user_text[:28]
-        chat["messages"].append({"role": "user", "content": full, "show": shown})
+    history = st.session_state.messages[-12:]
+    while history and history[0]["role"] == "assistant":
+        history = history[1:]
 
-        with st.chat_message("user"):
-            st.markdown(shown)
-        with st.chat_message("assistant"):
-            reply = st.write_stream(stream_reply(chat["messages"]))
-        chat["messages"].append({"role": "assistant", "content": reply})
+    api_messages = [{"role": "system", "content": system}]
+    for i, m in enumerate(history):
+        if i == len(history) - 1 and m["parts"]:
+            content = [{"type": "text", "text": m["text"]}] + m["parts"]
+        else:
+            content = m["text"]
+        api_messages.append({"role": m["role"], "content": content})
 
-        save_chats()
-        st.rerun()
+    has_image = bool(history[-1]["parts"])
+    model = VISION_MODEL if has_image else TEXT_MODEL
+    extra_args = {} if has_image else {"reasoning_effort": "low"}
+
+    def stream_reply():
+        resp = client.chat.completions.create(
+            model=model, messages=api_messages, stream=True, **extra_args)
+        for chunk in resp:
+            if chunk.choices and chunk.choices[0].delta.content:
+                yield chunk.choices[0].delta.content
+
+    with st.chat_message("assistant"):
+        try:
+            reply = st.write_stream(stream_reply())
+        except Exception as e:
+            reply = "Error: " + str(e)[:300]
+            st.markdown(reply)
+
+    st.session_state.messages.append({
+        "role": "assistant", "text": reply, "parts": [],
+        "images": [], "show": reply})
